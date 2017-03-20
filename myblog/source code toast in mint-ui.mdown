@@ -1,0 +1,179 @@
+# Vue 下，toast组件实现 (mint-ui)
+
+> 最近写的 Vue-Friendship 中，一直不知道如何去优雅地实现``toast``，今天翻了下mint-ui的``toast``，发现一个小小的``toast``也是要复杂的代码去实现，这篇文章就是来分析一下mint-ui中``toast``的源码。
+
+## 文件目录
+可以先看看其中的文件目录
+
+└─toast
+    │  index.js
+    │  README.md
+    │  
+    └─src
+            toast.js
+            toast.vue
+## index.js
+最上层的是``toast``文件夹，里面有一个``index.js``出口，里面的代码很简单，就是把``./src/toast.js``往外暴露。
+
+```javascript
+export { default } from './src/toast.js';
+```
+
+## toast.vue
+这个文件是放着的是vue模板，以及一些props。其中vue的模板对有无icon的情况做了下兼容，这个不是重点可以自己去看看，下面来看下props
+
+```javascript
+props: {
+      message: String,
+      className: {
+        type: String,
+        default: ''
+      },
+      position: {
+        type: String,
+        default: 'middle'
+      },
+      iconClass: {
+        type: String,
+        default: ''
+      }
+    },
+
+    data() {
+      return {
+        visible: false
+      };
+    },
+```
+
+在这里，定义了四个props，分别是类名``className``、位置``position``以及icon的类``iconClass``。这里有个``visible``的data属性，控制toast的出现与消失。
+
+在下面的computed中，根据``position``的不同分别给了不同的类从而实现位置的变化，接着拼接整个className。最后整个通过``export default``导出。
+
+## toast.js
+> ``toast.js``是实现toast的重点。
+
+### 创建组件构造函数 && 实例池
+先是通过``Vue.extend``，将``toast.vue``引入，并创建一个Vue的组件构造函数。
+接着定义一个``toastPool``数组作为实例池，用于存储已创建的toast实例。
+```javascript
+// 创建组件构造函数
+const ToastConstructor = Vue.extend(require('./toast.vue')); 
+// 定义一个实例池
+let toastPool = [];
+```
+
+
+### getAnInstance()
+定义一个函数，用于获取实例
+```javascript
+let getAnInstance = () => {
+    // 如果实例池中有实力，则不建立新的实例
+  if (toastPool.length > 0) {
+    let instance = toastPool[0];
+    // 每当从实例池取走一个实例，则删除这个实例
+    toastPool.splice(0, 1);
+    return instance;
+  }
+  // 如果没有，建立新的实例
+  return new ToastConstructor({
+    el: document.createElement('div')
+  });
+};
+```
+
+### returnAnInstance() && removeDom()
+这两个函数比较简单，``returnAnInstance``是把实例返回给实例池
+```javascript
+let returnAnInstance = instance => {  
+  if (instance) {
+    // 直接push就可以
+    toastPool.push(instance);
+  }
+};
+```
+
+``removeDom``则是在toast结束后删除此Dom，这里不详讲。
+
+### ToastConstructor.prototype.close()
+在这个函数，把本实例``visible``设为false，然后绑定一个``transitionend``事件。这个事件会在通过``transition``的动画结束后，则执行``removeDom``。然后设置closed为true，最后把实例返回到实例池中保存起来。
+```javascript
+ToastConstructor.prototype.close = function() {
+    // toast不可见
+  this.visible = false;
+  // 绑定事件，在动画结束后执行删除dom的动作
+  this.$el.addEventListener('transitionend', removeDom);
+  // 设置已结束
+  this.closed = true;
+  // 返回实例池
+  returnAnInstance(this);
+};
+```
+
+### Toast主函数
+
+在mint-ui中，这个是``Vue.$toast``的入口。
+```javascript
+// 如果没有options，定义一个options
+let Toast = (options = {}) => {
+    // 定义延时
+  let duration = options.duration || 3000;
+  // 获取一个实例
+  let instance = getAnInstance();
+  instance.closed = false;
+  // 清除定时器
+  clearTimeout(instance.timer);
+  // 下面几个是设置props
+  instance.message = typeof options === 'string' ? options : options.message;
+  instance.position = options.position || 'middle';
+  instance.className = options.className || '';
+  instance.iconClass = options.iconClass || '';
+  // 把dom插入body中
+  document.body.appendChild(instance.$el);
+  Vue.nextTick(function() {
+    // 设置为可见
+    instance.visible = true;
+    // 把dom上绑定的removeDom先移除
+    instance.$el.removeEventListener('transitionend', removeDom);
+    // 打开定时器
+    ~duration && (instance.timer = setTimeout(function() {
+      if (instance.closed) return;
+      // 结束后执行close
+      instance.close();
+    }, duration));
+  });
+  // 返回实例
+  return instance;
+};
+
+```
+最后通过``export default``往外暴露Toast函数
+
+### Vue.nextTick
+在Toast中，有一个``Vue.nextTick``。
+在Vue中，修改了data后，被绑定的视图不会立马更新。在下次 DOM 更新循环结束之后执行延迟回调。在修改数据之后立即使用这个方法，获取更新后的 DOM。
+```javascript
+// e.g
+var vm = new Vue({
+    el: '#example',
+    data: {
+        msg: '123'
+    }
+})
+vm.msg = 'new message' // change data
+vm.$el.textContent === 'new message' // false
+Vue.nextTick(function() {
+    vm.$el.textContent === 'new message' // true
+})
+```
+
+## 绑定在Vue上
+在``mint-ui/src/inde``中绑定在Vue上
+```javascript
+import Toast from '../packages/toast';
+
+Vue.$toast = Vue.prototype.$toast = Toast;
+```
+
+这样就可以直接通过``Vue.$toast``优雅地实现toast
+
